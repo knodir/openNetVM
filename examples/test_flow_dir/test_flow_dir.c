@@ -36,6 +36,8 @@
  *   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  *  test_flow_dir.c - an example using onvm_flow_dir_* APIs.
+ *  Ack: interactive CLI is adopted from LSH (with The Unlicense) at 
+ *  https://brennan.io/2015/01/16/write-a-shell-in-c/
  ********************************************************************/
 
 #include <assert.h>
@@ -48,6 +50,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/queue.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <rte_common.h>
@@ -65,6 +68,8 @@
 #include "onvm_sc_mgr.h"
 
 #define NF_TAG "test_flow_dir"
+
+extern struct onvm_ft *sdn_ft;
 
 /* number of package between each print */
 static uint32_t print_delay = 1000000;
@@ -157,6 +162,8 @@ packet_handler(struct rte_mbuf *pkt, struct onvm_pkt_meta *meta,
         static uint32_t counter = 0;
         struct onvm_flow_entry *flow_entry = NULL;
         int ret;
+        
+        // printf("--- bar\n");
 
         if (++counter == print_delay) {
                 do_stats_display(pkt);
@@ -166,6 +173,8 @@ packet_handler(struct rte_mbuf *pkt, struct onvm_pkt_meta *meta,
         ret = onvm_flow_dir_get_pkt(pkt, &flow_entry);
         if (ret >= 0) {
                 meta->action = ONVM_NF_ACTION_NEXT;
+                printf("meta->action = %d\n", meta->action);
+                //exit(0);
         } else {
                 ret = onvm_flow_dir_add_pkt(pkt, &flow_entry);
                 if (ret < 0) {
@@ -176,9 +185,236 @@ packet_handler(struct rte_mbuf *pkt, struct onvm_pkt_meta *meta,
                 memset(flow_entry, 0, sizeof(struct onvm_flow_entry));
                 flow_entry->sc = onvm_sc_create();
                 onvm_sc_append_entry(flow_entry->sc, ONVM_NF_ACTION_TONF, destination);
-                // onvm_sc_print(flow_entry->sc);
+                onvm_sc_print(flow_entry->sc);
         }
         return 0;
+}
+
+static char*
+lsh_read_line(void) {
+        int nchars_read; 
+        char *line = NULL;
+        size_t bufsize = 0; // have getline allocate a buffer for us
+        nchars_read = getline(&line, &bufsize, stdin);
+        if (nchars_read == EINVAL) {
+                perror("Invalid input\n");
+                exit(EXIT_FAILURE);
+        }
+        return line;
+}
+
+
+#define LSH_TOK_BUFSIZE 64
+#define ADD_LEN 7
+#define DEL_LEN 6
+#define LSH_TOK_DELIM " \t\r\n\a"
+#define EQ_TOK_DELIM "="
+/**
+   @brief Split a line into tokens (very naively).
+   @param line The line.
+   @return Null-terminated array of tokens.
+ */
+static char**
+lsh_split_line(char *line) {
+        int bufsize = LSH_TOK_BUFSIZE, position = 0;
+        char **tokens = malloc(bufsize * sizeof(char*));
+        char *token;
+
+        if (!tokens) {
+                printf("lsh: allocation error\n");
+                exit(EXIT_FAILURE);
+        }
+
+        token = strtok(line, LSH_TOK_DELIM);
+        while (token != NULL) {
+                tokens[position] = token;
+                position++;
+
+                if (position >= bufsize) {
+                        bufsize += LSH_TOK_BUFSIZE;
+                        tokens = realloc(tokens, bufsize * sizeof(char*));
+                        if (!tokens) {
+                                perror("token allocation error\n");
+                                exit(EXIT_FAILURE);
+                        }
+                }
+
+                token = strtok(NULL, LSH_TOK_DELIM);
+        }
+        tokens[position] = NULL;
+        return tokens;
+}
+
+/**
+   @brief Split a string into tokens with equal delimiter.
+   @param whole_str The string to tokenize.
+   @return Null-terminated array of tokens.
+ */
+static char**
+split_to_tokens(char *whole_str) {
+        int bufsize = LSH_TOK_BUFSIZE, position = 0;
+        char **tokens = malloc(bufsize * sizeof(char*));
+        char *token;
+
+        if (!tokens) {
+                perror("allocation error\n");
+                exit(EXIT_FAILURE);
+        }
+
+        token = strtok(whole_str, EQ_TOK_DELIM);
+        while (token != NULL) {
+                tokens[position] = token;
+                position++;
+
+                if (position >= bufsize) {
+                        bufsize += LSH_TOK_BUFSIZE;
+                        tokens = realloc(tokens, bufsize * sizeof(char*));
+                        if (!tokens) {
+                                perror("token allocation error\n");
+                                exit(EXIT_FAILURE);
+                        }
+                }
+
+                token = strtok(NULL, LSH_TOK_DELIM);
+        }
+        tokens[position] = NULL;
+        return tokens;
+}
+
+static void
+cli_help(void) {
+        printf("TBD help\n");
+}
+
+static int
+len(char **ptr) {
+        int count = 0;
+        while (ptr[count] != NULL) {
+                count += 1;
+        }
+        return count;
+}
+
+static int
+add_ft_entry(char **args) {
+        char **tokens;
+        int i = 0, kv_len = 2;
+        int argc = len(args);
+        printf("argc = %d\n", argc);
+        for (i = 0; i < argc; i++) {
+                printf("%s\n", args[i]);
+        }
+        if (argc != 7) {
+                printf("invalid length (%d), should be %d", argc, ADD_LEN);
+                return 0;
+        }
+        // skip args[0] since it is just "add" command
+        for (i = 1; i < argc; i++) {
+                tokens = split_to_tokens(args[i]);
+                if (len(tokens) != kv_len) {
+                        printf("invalid key-value length (%d), should be %d", len(tokens), kv_len);
+                        return 0;
+                }
+                printf("tokens[0] = %s, tokens[1] = %s\n", tokens[0], tokens[1]);
+                free(tokens);
+        }
+        // add src-ip=1.2.3.4 dst-ip=1.2.3.5 src-port=42 dst-port=42 proto=tcp next-sc=1
+        return 0;
+}
+
+// /*Struct that holds all NF state information */
+// struct state_info {
+//         struct onvm_ft *ft;
+//         uint16_t destination;
+//         uint16_t print_delay;
+//         uint16_t num_stored;
+//         uint64_t elapsed_cycles;
+//         uint64_t last_cycles;
+// };
+// 
+// /*Struct that holds info about each flow, and is stored at each flow table entry */
+// struct flow_stats {
+//         int pkt_count;
+//         uint64_t last_pkt_cycles;
+//         int is_active;
+// };
+// 
+// struct state_info *state_info;
+
+
+static void
+show_flow_table(void) {
+        struct flow_stats *data = NULL;
+        struct onvm_ft_ipv4_5tuple *key = NULL;
+        uint32_t next = 0;
+        int32_t index;
+        struct onvm_flow_entry *flow_entry;
+        int entry = 0, ret = 0, i = 0;
+
+        printf("------------------------------\n");
+        printf("     Flow Table Contents\n");
+        printf("------------------------------\n");
+        // sdn_ft is initialized by onvm_flow_dir_nf_init();
+        while ((index = onvm_ft_iterate(sdn_ft, (const void **)&key, (void **)&data, &next)) > -1) {
+                printf("Entry #%d. ", entry);
+                // printf("index = %d, next = %d, pkt_count = %d\n", index, next, data->pkt_count);
+                _onvm_ft_print_key(key);
+                ret = onvm_flow_dir_get_key(key, &flow_entry);
+                if (ret < 0) {
+                        perror("failed to get flow_entry for: ");
+                        _onvm_ft_print_key(key);
+                        exit(EXIT_FAILURE);
+                }
+                if (flow_entry != NULL) {
+                        printf("The length of the chain bound on this 5-tuple is %d\n",
+                                flow_entry->sc->chain_length);
+                        for (i = 0; i < flow_entry->sc->chain_length; i++) {
+                                printf("NF #%d has destination #%d; ", i, flow_entry->sc->sc[i].destination);
+                        }
+                        printf("\n");
+                }
+                printf("\n");
+                entry += 1;
+        }
+}
+
+static int
+run_cli(void) {
+        printf("Hello from run_cli()\n");
+        char *line;
+        char **args;
+        int status = 1;
+
+        // state_info = rte_calloc("state", 1, sizeof(struct state_info), 0);
+        // if (state_info == NULL) {
+        //         rte_exit(EXIT_FAILURE, "Unable to initialize NF state");
+        // }
+        // printf("state_info is not NULL\n");
+
+        do {
+          printf("> ");
+          line = lsh_read_line();
+          args = lsh_split_line(line);
+          //status = lsh_execute(args);
+          if (args[0] == NULL) {
+                  printf("empty command\n");
+          } else if (strcmp(args[0], "show") == 0) {
+                  show_flow_table();
+          } else if (strcmp(args[0], "add") == 0) {
+                  add_ft_entry(args);
+          } else if (strcmp(args[0], "exit") == 0) {
+                  printf("exiting the CLI. Rerun test_flow_dir() to get back to CLI. \n");
+                  status = 0;
+          } else {
+                  printf("invalid command, supported commands are only: show, add, del.\n");
+                  cli_help();
+          }
+
+          free(line);
+          free(args);
+        } while (status);
+
+				return 0;
 }
 
 int
@@ -214,9 +450,37 @@ main(int argc, char *argv[]) {
         /* Map the sdn_ft table */
         onvm_flow_dir_nf_init();
 
-        onvm_nflib_run(nf_local_ctx);
+        printf("--- foo\n");
 
-        onvm_nflib_stop(nf_local_ctx);
-        printf("If we reach here, program is ending\n");
-        return 0;
+				// run CLI on a separate process
+			  pid_t pid;
+  			pid = fork();
+  			if (pid == 0) {
+    						// Child process
+		 				    if (run_cli() == -1) {
+		 				      			perror("failed to execute run_cli()");
+                        exit(EXIT_FAILURE);
+		 				    }
+		 				    exit(EXIT_FAILURE);
+		 		} else if (pid < 0) {
+		 				    // Error forking
+		 				    perror("failed to fork a process");
+                exit(EXIT_FAILURE);
+			  } else {
+		 				    // Parent process
+                onvm_nflib_run(nf_local_ctx);
+                onvm_nflib_stop(nf_local_ctx);
+                printf("If we reach here, program is ending\n");
+                return 0;
+
+		 				    // do {
+					 			// 	      wpid = waitpid(pid, &status, WUNTRACED);
+		 				    // } while (!WIFEXITED(status) && !WIFSIGNALED(status));
+		 		}
+
+        // onvm_nflib_run(nf_local_ctx);
+
+        // onvm_nflib_stop(nf_local_ctx);
+        // printf("If we reach here, program is ending\n");
+        // return 0;
 }

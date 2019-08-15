@@ -878,7 +878,7 @@ onvm_nflib_lookup_shared_structs(void) {
 
         mz_scp = rte_memzone_lookup(MZ_SCP_INFO);
         if (mz_scp == NULL)
-                rte_exit(EXIT_FAILURE, "Cannot get service chain info structre\n");
+                rte_exit(EXIT_FAILURE, "Cannot get service chain info structure\n");
         scp = mz_scp->addr;
         default_chain = *scp;
         onvm_sc_print(default_chain);

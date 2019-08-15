@@ -71,7 +71,7 @@ onvm_flow_dir_get_pkt(struct rte_mbuf* pkt, struct onvm_flow_entry** flow_entry)
 int
 onvm_flow_dir_add_pkt(struct rte_mbuf* pkt, struct onvm_flow_entry** flow_entry);
 /* delete the flow dir entry, but do not free the service chain (useful if a service chain is pointed to by several
- * different flows */
+ * different flows) */
 int
 onvm_flow_dir_del_pkt(struct rte_mbuf* pkt);
 /* Delete the flow dir entry and free the service chain */
